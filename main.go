@@ -27,8 +27,8 @@ type Doc struct {
 type ObjectType int
 
 const (
-	ObjectType_Map  ObjectType = 0
-	ObjectType_List            = 1
+	Object_Map  ObjectType = 0
+	Object_List            = 1
 )
 
 type Object struct {
@@ -49,6 +49,12 @@ type List struct {
 type Value struct {
 	handle C.AMvalue
 	root   Doc
+}
+
+type EmptyList struct {
+}
+
+type EmptyMap struct {
 }
 
 // @Incomplete: support actor id
@@ -123,10 +129,14 @@ func MapPut(doc Doc, obj Object, key string, value interface{}) {
 		C.AMfree(C.AMmapPutInt(doc.handle, objId, cstr, C.longlong(value.(uint64))))
 	case float64:
 		C.AMfree(C.AMmapPutF64(doc.handle, objId, cstr, C.double(value.(float64))))
-		/*
-			case bool:
-				C.AMfree(C.AMmapPutBool(doc.handle, obj.handle, cstr, toCBool(value.(bool))))
-		*/
+	case bool:
+		C.AMfree(C.AMmapPutBool(doc.handle, obj.handle, cstr, C._Bool(value.(bool))))
+	case EmptyList:
+		MapPutObject(doc, obj, key, Object_List)
+	case EmptyMap:
+		MapPutObject(doc, obj, key, Object_Map)
+	default:
+		fmt.Println("[automerge] MapPut - unhandled case!")
 	}
 }
 
@@ -140,6 +150,18 @@ func ListSet(doc Doc, obj Object, index uint64, insert bool, value interface{}) 
 		C.AMfree(C.AMlistPutStr(doc.handle, objId, C.ulonglong(index), C._Bool(insert), value_cstr))
 	case int:
 		C.AMfree(C.AMlistPutInt(doc.handle, objId, C.ulonglong(index), C._Bool(insert), C.longlong(value.(int))))
+	case uint64:
+		C.AMfree(C.AMlistPutInt(doc.handle, objId, C.ulonglong(index), C._Bool(insert), C.longlong(value.(uint64))))
+	case float64:
+		C.AMfree(C.AMlistPutF64(doc.handle, objId, C.ulonglong(index), C._Bool(insert), C.double(value.(float64))))
+	case bool:
+		C.AMfree(C.AMlistPutBool(doc.handle, objId, C.ulonglong(index), C._Bool(insert), C._Bool(value.(bool))))
+	case EmptyList:
+		ListPutObject(doc, obj, index, insert, Object_List)
+	case EmptyMap:
+		ListPutObject(doc, obj, index, insert, Object_Map)
+	default:
+		fmt.Println("[automerge] ListSet - unhandled case!")
 	}
 }
 
@@ -147,7 +169,7 @@ func MapPutObject(doc Doc, obj Object, key string, objType ObjectType) Object {
 	objId := obj.handle
 
 	var actualType C.uchar
-	if objType == ObjectType_List {
+	if objType == Object_List {
 		actualType = C.AM_OBJ_TYPE_LIST
 	} else {
 		actualType = C.AM_OBJ_TYPE_MAP
@@ -165,7 +187,7 @@ func ListPutObject(doc Doc, obj Object, index uint64, insert bool, objType Objec
 	objId := obj.handle
 
 	var actualType C.uchar
-	if objType == ObjectType_List {
+	if objType == Object_List {
 		actualType = C.AM_OBJ_TYPE_LIST
 	} else {
 		actualType = C.AM_OBJ_TYPE_MAP
@@ -189,14 +211,14 @@ func (doc Doc) Root() Map {
 
 func (m Map) NewMap(key string) Map {
 	result := Map{}
-	result.handle = MapPutObject(m.root, m.handle, key, ObjectType_Map)
+	result.handle = MapPutObject(m.root, m.handle, key, Object_Map)
 	result.root = m.root
 	return result
 }
 
 func (m Map) NewList(key string) List {
 	result := List{}
-	result.handle = MapPutObject(m.root, m.handle, key, ObjectType_List)
+	result.handle = MapPutObject(m.root, m.handle, key, Object_List)
 	result.root = m.root
 	return result
 }
@@ -245,14 +267,14 @@ func (m Map) Keys() []string {
 
 func (list List) NewMap(index uint64) Map {
 	result := Map{}
-	result.handle = ListPutObject(list.root, list.handle, index, false, ObjectType_Map)
+	result.handle = ListPutObject(list.root, list.handle, index, false, Object_Map)
 	result.root = list.root
 	return result
 }
 
 func (list List) NewList(index uint64) List {
 	result := List{}
-	result.handle = ListPutObject(list.root, list.handle, index, false, ObjectType_List)
+	result.handle = ListPutObject(list.root, list.handle, index, false, Object_List)
 	result.root = list.root
 	return result
 }
@@ -351,6 +373,14 @@ func (doc Doc) NewMap(key string) Map {
 	return doc.Root().NewMap(key)
 }
 
+func (doc Doc) List() EmptyList {
+	return EmptyList{}
+}
+
+func (doc Doc) Map() EmptyMap {
+	return EmptyMap{}
+}
+
 func (doc Doc) Set(key string, value interface{}) {
 	doc.Root().Set(key, value)
 }
@@ -359,11 +389,11 @@ func (doc Doc) Get(key string) Value {
 	return doc.Root().Get(key)
 }
 
-func toCBool(x bool) C.int {
+func toCBool(x bool) C._Bool {
 	if x {
-		return C.int(1)
+		return C._Bool(true)
 	}
-	return C.int(0)
+	return C._Bool(false)
 }
 
 func fromCBool(x C.int) bool {
@@ -387,6 +417,12 @@ func main() {
 	root.Set("bar", 23)
 	root.Delete("bar")
 
+	mappy := doc1.Root().NewMap("mappy")
+	mappy.Set("a", true)
+
+	mappy2 := doc1.Root().Get("mappy").ToMap()
+	mappy2.Set("b", 123123)
+
 	cards := doc1.Root().NewList("cards")
 	cards.Push("a")
 	cards.Push("b")
@@ -404,17 +440,15 @@ func main() {
 	fmt.Println("cards[3]:", cards.Get(3).Value())
 	fmt.Println("cards.Count():", cards.Count())
 
+	doc1.Change("add cards2", func(root Map) {
+		root.Set("cards2", doc1.List())
+		root.Get("cards2").ToList().Push(true)
+	})
+
 	fmt.Println("doc1.Root().Keys():", doc1.Root().Keys())
 
-	/*
-		doc1.Change("add cards", func(doc Map) {
-			//doc.Set("cards", doc.NewList())
-			doc.NewList("cards")
-		})
-
-		list := doc1.PutList(doc1.Root(), "list")
-		list.Insert(0, "a")
-	*/
+	fmt.Println("mappy.Keys():", mappy.Keys())
+	fmt.Println("mappy2.Keys():", mappy2.Keys())
 
 	/*
 		const BENCH_TIMES = 10_000
