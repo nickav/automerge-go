@@ -2,13 +2,11 @@ package main
 
 //
 // TODO(nick):
-// - finish / clean up API weirdness
+// - finish / clean up API weirdness??
 // - memory situation
-// - get changes
-// - list iterate over values, delete
-// - object get, iterate, delete
+// - get history / changes
 // - counters?
-// - hashes
+// - JSON serialize?
 //
 
 import (
@@ -50,6 +48,7 @@ type List struct {
 
 type Value struct {
 	handle C.AMvalue
+	root   Doc
 }
 
 // @Incomplete: support actor id
@@ -158,11 +157,11 @@ func MapPutObject(doc Doc, obj Object, key string, objType ObjectType) Object {
 	defer C.free(unsafe.Pointer(cstr))
 
 	result := Object{}
-	result.handle = C.toAMobjId(C.AMresultValue(C.AMmapPutObject(doc.handle, objId, cstr, actualType)))
+	result.handle = C.AMG_ToObjectID(C.AMresultValue(C.AMmapPutObject(doc.handle, objId, cstr, actualType)))
 	return result
 }
 
-func ListPutObject(doc Doc, obj Object, index int64, insert bool, objType ObjectType) Object {
+func ListPutObject(doc Doc, obj Object, index uint64, insert bool, objType ObjectType) Object {
 	objId := obj.handle
 
 	var actualType C.uchar
@@ -173,25 +172,9 @@ func ListPutObject(doc Doc, obj Object, index int64, insert bool, objType Object
 	}
 
 	result := Object{}
-	result.handle = C.toAMobjId(C.AMresultValue(C.AMlistPutObject(doc.handle, objId, C.ulonglong(index), C._Bool(insert), actualType)))
+	result.handle = C.AMG_ToObjectID(C.AMresultValue(C.AMlistPutObject(doc.handle, objId, C.ulonglong(index), C._Bool(insert), actualType)))
 	return result
 }
-
-/*
-func MapPutMap(m Map, key string) Map {
-	result := Map{}
-	result.handle = MapPutObject(m.root, m.handle, key, ObjectType_Map)
-	result.root = m.root
-	return result
-}
-
-func MapPutList(m Map, key string) List {
-	result := List{}
-	result.handle = MapPutObject(m.root, m.handle, key, ObjectType_List)
-	result.root = m.root
-	return result
-}
-*/
 
 func (doc Doc) Root() Map {
 	result := Map{}
@@ -200,9 +183,20 @@ func (doc Doc) Root() Map {
 	return result
 }
 
+//
+// Map
+//
+
 func (m Map) NewMap(key string) Map {
 	result := Map{}
 	result.handle = MapPutObject(m.root, m.handle, key, ObjectType_Map)
+	result.root = m.root
+	return result
+}
+
+func (m Map) NewList(key string) List {
+	result := List{}
+	result.handle = MapPutObject(m.root, m.handle, key, ObjectType_List)
 	result.root = m.root
 	return result
 }
@@ -217,6 +211,7 @@ func (m Map) Get(key string) Value {
 
 	result := Value{}
 	result.handle = C.AMG_MapGet(m.root.handle, m.handle.handle, cstr)
+	result.root = m.root
 	return result
 }
 
@@ -224,17 +219,41 @@ func (m Map) Count() uint64 {
 	return uint64(C.AMG_GetSize(m.root.handle, m.handle.handle))
 }
 
-func (m Map) Remove(key string) {
+func (m Map) Delete(key string) {
 	cstr := C.CString(key)
 	defer C.free(unsafe.Pointer(cstr))
 
 	C.AMG_MapDelete(m.root.handle, m.handle.handle, cstr)
 }
 
-func (m Map) NewList(key string) List {
+func (m Map) Keys() []string {
+	amhandle := C.AMkeys(m.root.handle, m.handle.handle, nil)
+	strs := C.AMG_ToStrs(C.AMresultValue(amhandle))
+
+	result := []string{}
+	for str := C.AMstrsNext(&strs, 1); str != nil; str = C.AMstrsNext(&strs, 1) {
+		result = append(result, C.GoString(str))
+	}
+
+	C.AMfree(amhandle)
+	return result
+}
+
+//
+// List
+//
+
+func (list List) NewMap(index uint64) Map {
+	result := Map{}
+	result.handle = ListPutObject(list.root, list.handle, index, false, ObjectType_Map)
+	result.root = list.root
+	return result
+}
+
+func (list List) NewList(index uint64) List {
 	result := List{}
-	result.handle = MapPutObject(m.root, m.handle, key, ObjectType_List)
-	result.root = m.root
+	result.handle = ListPutObject(list.root, list.handle, index, false, ObjectType_List)
+	result.root = list.root
 	return result
 }
 
@@ -253,6 +272,7 @@ func (list List) Push(value interface{}) {
 func (list List) Get(index uint64) Value {
 	result := Value{}
 	result.handle = C.AMG_ListGet(list.root.handle, list.handle.handle, C.ulonglong(index))
+	result.root = list.root
 	return result
 }
 
@@ -260,14 +280,14 @@ func (list List) Count() uint64 {
 	return uint64(C.AMG_GetSize(list.root.handle, list.handle.handle))
 }
 
-func (list List) Remove(index uint64) {
+func (list List) Delete(index uint64) {
 	C.AMG_ListDelete(list.root.handle, list.handle.handle, C.ulonglong(index))
 }
 
 func (list List) Pop() interface{} {
 	value := list.Get(C.SIZE_MAX)
 
-	list.Remove(C.SIZE_MAX)
+	list.Delete(C.SIZE_MAX)
 
 	return value.Value()
 }
@@ -301,6 +321,28 @@ func (v Value) Value() interface{} {
 	return nil
 }
 
+func (v Value) ToList() List {
+	tag := C.AMG_GetType(v.handle)
+	// @Incomplete: check if object is list
+	result := List{}
+	if tag == C.AM_VALUE_OBJ_ID {
+		result.handle.handle = C.AMG_ToObjectID(v.handle)
+		result.root = v.root
+	}
+	return result
+}
+
+func (v Value) ToMap() Map {
+	tag := C.AMG_GetType(v.handle)
+	// @Incomplete: check if object is map
+	result := Map{}
+	if tag == C.AM_VALUE_OBJ_ID {
+		result.handle.handle = C.AMG_ToObjectID(v.handle)
+		result.root = v.root
+	}
+	return result
+}
+
 func (doc Doc) NewList(key string) List {
 	return doc.Root().NewList(key)
 }
@@ -313,7 +355,7 @@ func (doc Doc) Set(key string, value interface{}) {
 	doc.Root().Set(key, value)
 }
 
-func (doc Doc) Get(key string) interface{} {
+func (doc Doc) Get(key string) Value {
 	return doc.Root().Get(key)
 }
 
@@ -339,13 +381,19 @@ func main() {
 	fmt.Println("hello!")
 
 	doc1 := New()
-	doc1.Root().Set("hello", "world")
-	doc1.Root().Set("foo", 42)
-	doc1.Root().Set("bar", 23)
+	root := doc1.Root()
+	root.Set("hello", "world")
+	root.Set("foo", 42)
+	root.Set("bar", 23)
+	root.Delete("bar")
+
 	cards := doc1.Root().NewList("cards")
 	cards.Push("a")
 	cards.Push("b")
 	cards.Push("c")
+	cards.Pop()
+
+	doc1.Root().Get("cards").ToList().Push("d")
 
 	fmt.Println("hello:", doc1.Root().Get("hello").Value())
 	fmt.Println("foo:", doc1.Root().Get("foo").Value())
@@ -355,6 +403,8 @@ func main() {
 	fmt.Println("cards[2]:", cards.Get(2).Value())
 	fmt.Println("cards[3]:", cards.Get(3).Value())
 	fmt.Println("cards.Count():", cards.Count())
+
+	fmt.Println("doc1.Root().Keys():", doc1.Root().Keys())
 
 	/*
 		doc1.Change("add cards", func(doc Map) {

@@ -4,21 +4,6 @@
 
 #include "include/automerge.h"
 
-AMdoc *toAMdoc(AMvalue value)
-{
-    return value.doc;
-}
-
-AMbyteSpan toAMbyteSpan(AMvalue value)
-{
-    return value.bytes;
-}
-
-AMobjId *toAMobjId(AMvalue value)
-{
-    return (AMobjId *)value.obj_id;
-}
-
 AMdoc *AMG_Create(AMactorId *actor_id)
 {
     return AMresultValue(AMcreate(actor_id)).doc;
@@ -132,12 +117,6 @@ size_t AMG_GetSize(AMdoc *doc, AMobjId *obj_id)
     return AMobjSize(doc, obj_id, NULL);
 }
 
-/*
-AMstrs *AMG_MapGetKeys(AMdoc *doc, AMobjId *obj_id)
-{
-}
-*/
-
 AMvalueVariant AMG_GetType(AMvalue value)
 {
     return value.tag;
@@ -171,4 +150,19 @@ AMactorId *AMG_ToActorID(AMvalue value)
 uint64_t AMG_ToUint(AMvalue value)
 {
     return value.uint;
+}
+
+AMobjId *AMG_ToObjectID(AMvalue value)
+{
+    return (AMobjId *)value.obj_id;
+}
+
+AMdoc *AMG_ToDocument(AMvalue value)
+{
+    return value.doc;
+}
+
+AMstrs AMG_ToStrs(AMvalue value)
+{
+    return value.strs;
 }
