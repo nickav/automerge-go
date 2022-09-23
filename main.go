@@ -1,8 +1,19 @@
 package main
 
+//
+// TODO(nick):
+// - finish / clean up API weirdness
+// - memory situation
+// - get changes
+// - list iterate over values, delete
+// - object get, iterate, delete
+// - counters?
+// - hashes
+//
+
 import (
 	"fmt"
-	"time"
+	//"time"
 	"unsafe"
 )
 
@@ -24,20 +35,25 @@ const (
 
 type Object struct {
 	handle *C.AMobjId
+	//Type   ObjectType
 }
 
 type Map struct {
-	handle *C.AMobjId
+	handle Object
 	root   Doc
 }
 
 type List struct {
-	handle *C.AMobjId
+	handle Object
 	root   Doc
 }
 
+type Value struct {
+	handle C.AMvalue
+}
+
 // @Incomplete: support actor id
-func Init() Doc {
+func New() Doc {
 	result := Doc{}
 	result.handle = C.AMG_Create(nil)
 	return result
@@ -73,6 +89,12 @@ func Merge(dest Doc, src Doc) {
 	C.AMG_Merge(dest.handle, src.handle)
 }
 
+func Clone(doc Doc) Doc {
+	result := Doc{}
+	result.handle = C.AMG_Clone(doc.handle)
+	return result
+}
+
 type ChangeFn func(root Map)
 
 // @Incomplete: I _think_ this is all the "change" function does. But we should confirm that.
@@ -85,9 +107,11 @@ func (doc Doc) GetActorID() string {
 	return C.GoString(C.AMG_GetActorIDString(doc.handle))
 }
 
-func MapPut(doc Doc, objId *C.AMobjId, key string, value interface{}) {
+func MapPut(doc Doc, obj Object, key string, value interface{}) {
 	cstr := C.CString(key)
 	defer C.free(unsafe.Pointer(cstr))
+
+	objId := obj.handle
 
 	switch value.(type) {
 	case string:
@@ -107,7 +131,9 @@ func MapPut(doc Doc, objId *C.AMobjId, key string, value interface{}) {
 	}
 }
 
-func ListSet(doc Doc, objId *C.AMobjId, index uint64, insert bool, value interface{}) {
+func ListSet(doc Doc, obj Object, index uint64, insert bool, value interface{}) {
+	objId := obj.handle
+
 	switch value.(type) {
 	case string:
 		value_cstr := C.CString(value.(string))
@@ -118,7 +144,9 @@ func ListSet(doc Doc, objId *C.AMobjId, index uint64, insert bool, value interfa
 	}
 }
 
-func MapPutObject(doc Doc, objId *C.AMobjId, key string, objType ObjectType) Object {
+func MapPutObject(doc Doc, obj Object, key string, objType ObjectType) Object {
+	objId := obj.handle
+
 	var actualType C.uchar
 	if objType == ObjectType_List {
 		actualType = C.AM_OBJ_TYPE_LIST
@@ -134,13 +162,33 @@ func MapPutObject(doc Doc, objId *C.AMobjId, key string, objType ObjectType) Obj
 	return result
 }
 
+func ListPutObject(doc Doc, obj Object, index int64, insert bool, objType ObjectType) Object {
+	objId := obj.handle
+
+	var actualType C.uchar
+	if objType == ObjectType_List {
+		actualType = C.AM_OBJ_TYPE_LIST
+	} else {
+		actualType = C.AM_OBJ_TYPE_MAP
+	}
+
+	result := Object{}
+	result.handle = C.toAMobjId(C.AMresultValue(C.AMlistPutObject(doc.handle, objId, C.ulonglong(index), C._Bool(insert), actualType)))
+	return result
+}
+
 /*
+func MapPutMap(m Map, key string) Map {
+	result := Map{}
+	result.handle = MapPutObject(m.root, m.handle, key, ObjectType_Map)
+	result.root = m.root
+	return result
+}
 
-func ListPutObject(doc Doc, objId *C.AMobjId, key string, objType C.uchar) *C.AMobjId {
-	cstr := C.CString(key)
-	defer C.free(unsafe.Pointer(cstr))
-
-	result := C.toAMobjId(C.AMresultValue(C.AMlistPutObject(doc.handle, objId, cstr, objType)))
+func MapPutList(m Map, key string) List {
+	result := List{}
+	result.handle = MapPutObject(m.root, m.handle, key, ObjectType_List)
+	result.root = m.root
 	return result
 }
 */
@@ -148,23 +196,45 @@ func ListPutObject(doc Doc, objId *C.AMobjId, key string, objType C.uchar) *C.AM
 func (doc Doc) Root() Map {
 	result := Map{}
 	result.root = doc
-	result.handle = nil
+	result.handle = Object{} // nil for root
 	return result
 }
 
-func (doc Doc) Set(key string, value interface{}) {
-	MapPut(doc, doc.Root().handle, key, value)
+func (m Map) NewMap(key string) Map {
+	result := Map{}
+	result.handle = MapPutObject(m.root, m.handle, key, ObjectType_Map)
+	result.root = m.root
+	return result
 }
 
-func (obj Map) Set(key string, value interface{}) {
-	MapPut(obj.root, obj.handle, key, value)
+func (m Map) Set(key string, value interface{}) {
+	MapPut(m.root, m.handle, key, value)
 }
 
-func (doc Doc) PutList(at Map, key string) List {
+func (m Map) Get(key string) Value {
+	cstr := C.CString(key)
+	defer C.free(unsafe.Pointer(cstr))
+
+	result := Value{}
+	result.handle = C.AMG_MapGet(m.root.handle, m.handle.handle, cstr)
+	return result
+}
+
+func (m Map) Count() uint64 {
+	return uint64(C.AMG_GetSize(m.root.handle, m.handle.handle))
+}
+
+func (m Map) Remove(key string) {
+	cstr := C.CString(key)
+	defer C.free(unsafe.Pointer(cstr))
+
+	C.AMG_MapDelete(m.root.handle, m.handle.handle, cstr)
+}
+
+func (m Map) NewList(key string) List {
 	result := List{}
-	object := MapPutObject(doc, at.handle, key, ObjectType_List)
-	result.handle = object.handle
-	result.root = doc
+	result.handle = MapPutObject(m.root, m.handle, key, ObjectType_List)
+	result.root = m.root
 	return result
 }
 
@@ -176,32 +246,89 @@ func (list List) Set(index uint64, value interface{}) {
 	ListSet(list.root, list.handle, index, false, value)
 }
 
-/*
-func (doc Doc) PutMap(at Map, key string) Map {
+func (list List) Push(value interface{}) {
+	ListSet(list.root, list.handle, C.SIZE_MAX, true, value)
 }
-*/
 
-/*
-func (doc Doc) NewMap(key string) Map {
-	result := Map{}
-	result.handle = MapPutObject(doc, nil, key, C.AM_OBJ_TYPE_MAP)
-	result.root = doc
+func (list List) Get(index uint64) Value {
+	result := Value{}
+	result.handle = C.AMG_ListGet(list.root.handle, list.handle.handle, C.ulonglong(index))
 	return result
+}
+
+func (list List) Count() uint64 {
+	return uint64(C.AMG_GetSize(list.root.handle, list.handle.handle))
+}
+
+func (list List) Remove(index uint64) {
+	C.AMG_ListDelete(list.root.handle, list.handle.handle, C.ulonglong(index))
+}
+
+func (list List) Pop() interface{} {
+	value := list.Get(C.SIZE_MAX)
+
+	list.Remove(C.SIZE_MAX)
+
+	return value.Value()
+}
+
+// @Incomplete: do we want to define our own ValueType?
+func (v Value) Type() uint8 {
+	tag := C.AMG_GetType(v.handle)
+	return uint8(tag)
+}
+
+func (v Value) Value() interface{} {
+	tag := C.AMG_GetType(v.handle)
+
+	switch tag {
+	case C.AM_VALUE_BOOLEAN:
+		return bool(fromCBool(C.AMG_ToBool(v.handle)))
+	case C.AM_VALUE_ACTOR_ID:
+		return string(C.GoString(C.AMG_ActorIDToString(C.AMG_ToActorID(v.handle))))
+	case C.AM_VALUE_INT:
+		return int64(C.AMG_ToInt(v.handle))
+	case C.AM_VALUE_F64:
+		return float64(C.AMG_ToF64(v.handle))
+	case C.AM_VALUE_NULL:
+		return nil
+	case C.AM_VALUE_STR:
+		return string(C.GoString(C.AMG_ToString(v.handle)))
+	case C.AM_VALUE_UINT:
+		return uint64(C.AMG_ToUint(v.handle))
+	}
+
+	return nil
 }
 
 func (doc Doc) NewList(key string) List {
-	result := List{}
-	result.handle = MapPutObject(doc, nil, key, C.AM_OBJ_TYPE_LIST)
-	result.root = doc
-	return result
+	return doc.Root().NewList(key)
 }
-*/
+
+func (doc Doc) NewMap(key string) Map {
+	return doc.Root().NewMap(key)
+}
+
+func (doc Doc) Set(key string, value interface{}) {
+	doc.Root().Set(key, value)
+}
+
+func (doc Doc) Get(key string) interface{} {
+	return doc.Root().Get(key)
+}
 
 func toCBool(x bool) C.int {
 	if x {
 		return C.int(1)
 	}
 	return C.int(0)
+}
+
+func fromCBool(x C.int) bool {
+	if x == 0 {
+		return false
+	}
+	return true
 }
 
 func resultToString(byteSpan C.AMbyteSpan) string {
@@ -211,29 +338,47 @@ func resultToString(byteSpan C.AMbyteSpan) string {
 func main() {
 	fmt.Println("hello!")
 
-	doc1 := Init()
+	doc1 := New()
+	doc1.Root().Set("hello", "world")
+	doc1.Root().Set("foo", 42)
+	doc1.Root().Set("bar", 23)
+	cards := doc1.Root().NewList("cards")
+	cards.Push("a")
+	cards.Push("b")
+	cards.Push("c")
 
-	doc1.Set("hello", "world")
+	fmt.Println("hello:", doc1.Root().Get("hello").Value())
+	fmt.Println("foo:", doc1.Root().Get("foo").Value())
 
-	list := doc1.PutList(doc1.Root(), "list")
-	list.Insert(0, "a")
-
-	const BENCH_TIMES = 10_000
-	start := time.Now()
-
-	for i := 0; i < 10_000; i++ {
-		Load(doc1.Save())
-	}
-
-	end := time.Now()
-	fmt.Println("Took", end.Sub(start), "(average: ", end.Sub(start)/time.Duration(BENCH_TIMES), ")")
+	fmt.Println("cards[0]:", cards.Get(0).Value())
+	fmt.Println("cards[1]:", cards.Get(1).Value())
+	fmt.Println("cards[2]:", cards.Get(2).Value())
+	fmt.Println("cards[3]:", cards.Get(3).Value())
+	fmt.Println("cards.Count():", cards.Count())
 
 	/*
-		cards := doc1.NewMap("cards")
-		doc1.Set("cards", true)
+		doc1.Change("add cards", func(doc Map) {
+			//doc.Set("cards", doc.NewList())
+			doc.NewList("cards")
+		})
+
+		list := doc1.PutList(doc1.Root(), "list")
+		list.Insert(0, "a")
 	*/
 
-	fmt.Println(doc1)
+	/*
+		const BENCH_TIMES = 10_000
+		start := time.Now()
+
+		for i := 0; i < 10_000; i++ {
+			Load(doc1.Save())
+		}
+
+		end := time.Now()
+		fmt.Println("Took", end.Sub(start), "(average:", end.Sub(start)/time.Duration(BENCH_TIMES), ")")
+
+		fmt.Println(doc1)
+	*/
 
 	fmt.Println("doc1 ID:", doc1.GetActorID())
 	fmt.Println("Save:", doc1.Save())
