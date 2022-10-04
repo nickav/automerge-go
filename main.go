@@ -2,16 +2,18 @@ package main
 
 //
 // TODO(nick):
-// - finish / clean up API weirdness??
-// - memory situation
+// - fix memory leaks everywhere
 // - get history / changes
-// - counters?
+// - support counters
 // - JSON serialize?
 //
+
+// API examples:
 
 // https://github.com/progrium/goja-automerge/blob/main/automerge_test.go
 // https://github.com/automerge/automerge-rs/blob/main/automerge-c/examples/quickstart.c
 // https://github.com/automerge/automerge-rs/blob/c2ed212dbccafd66c85cd0bb9527bb27f81b6e17/automerge-c/test/ported_wasm/basic_tests.c
+// https://github.com/automerge/automerge-rs/blob/main/automerge/examples/quickstart.rs
 
 import (
 	"fmt"
@@ -429,8 +431,6 @@ func resultToString(byteSpan C.AMbyteSpan) string {
 }
 
 func main() {
-	fmt.Println("hello!")
-
 	doc1 := New()
 	root := doc1.Root()
 	root.Set("hello", "world")
@@ -470,20 +470,6 @@ func main() {
 
 	fmt.Println("mappy.Keys():", mappy.Keys())
 	fmt.Println("mappy2.Keys():", mappy2.Keys())
-
-	/*
-		const BENCH_TIMES = 10_000
-		start := time.Now()
-
-		for i := 0; i < 10_000; i++ {
-			Load(doc1.Save())
-		}
-
-		end := time.Now()
-		fmt.Println("Took", end.Sub(start), "(average:", end.Sub(start)/time.Duration(BENCH_TIMES), ")")
-
-		fmt.Println(doc1)
-	*/
 
 	fmt.Println("doc1 ID:", doc1.GetActorID())
 	fmt.Println("Save:", doc1.Save())
