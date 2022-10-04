@@ -9,6 +9,10 @@ package main
 // - JSON serialize?
 //
 
+// https://github.com/progrium/goja-automerge/blob/main/automerge_test.go
+// https://github.com/automerge/automerge-rs/blob/main/automerge-c/examples/quickstart.c
+// https://github.com/automerge/automerge-rs/blob/c2ed212dbccafd66c85cd0bb9527bb27f81b6e17/automerge-c/test/ported_wasm/basic_tests.c
+
 import (
 	"fmt"
 	//"time"
@@ -19,6 +23,10 @@ import (
 #include "main.h"
 */
 import "C"
+
+//
+// Types
+//
 
 type Doc struct {
 	handle *C.AMdoc
@@ -56,6 +64,10 @@ type EmptyList struct {
 
 type EmptyMap struct {
 }
+
+//
+// Doc
+//
 
 // @Incomplete: support actor id
 func New() Doc {
@@ -112,58 +124,36 @@ func (doc Doc) GetActorID() string {
 	return C.GoString(C.AMG_GetActorIDString(doc.handle))
 }
 
-func MapPut(doc Doc, obj Object, key string, value interface{}) {
-	cstr := C.CString(key)
-	defer C.free(unsafe.Pointer(cstr))
-
-	objId := obj.handle
-
-	switch value.(type) {
-	case string:
-		value_cstr := C.CString(value.(string))
-		defer C.free(unsafe.Pointer(value_cstr))
-		C.AMfree(C.AMmapPutStr(doc.handle, objId, cstr, value_cstr))
-	case int:
-		C.AMfree(C.AMmapPutInt(doc.handle, objId, cstr, C.longlong(value.(int))))
-	case uint64:
-		C.AMfree(C.AMmapPutInt(doc.handle, objId, cstr, C.longlong(value.(uint64))))
-	case float64:
-		C.AMfree(C.AMmapPutF64(doc.handle, objId, cstr, C.double(value.(float64))))
-	case bool:
-		C.AMfree(C.AMmapPutBool(doc.handle, obj.handle, cstr, C._Bool(value.(bool))))
-	case EmptyList:
-		MapPutObject(doc, obj, key, Object_List)
-	case EmptyMap:
-		MapPutObject(doc, obj, key, Object_Map)
-	default:
-		fmt.Println("[automerge] MapPut - unhandled case!")
-	}
+func (doc Doc) PutObject(obj Object, key string, objType ObjectType) Object {
+	return MapPutObject(doc, obj, key, objType)
 }
 
-func ListSet(doc Doc, obj Object, index uint64, insert bool, value interface{}) {
-	objId := obj.handle
-
-	switch value.(type) {
-	case string:
-		value_cstr := C.CString(value.(string))
-		defer C.free(unsafe.Pointer(value_cstr))
-		C.AMfree(C.AMlistPutStr(doc.handle, objId, C.ulonglong(index), C._Bool(insert), value_cstr))
-	case int:
-		C.AMfree(C.AMlistPutInt(doc.handle, objId, C.ulonglong(index), C._Bool(insert), C.longlong(value.(int))))
-	case uint64:
-		C.AMfree(C.AMlistPutInt(doc.handle, objId, C.ulonglong(index), C._Bool(insert), C.longlong(value.(uint64))))
-	case float64:
-		C.AMfree(C.AMlistPutF64(doc.handle, objId, C.ulonglong(index), C._Bool(insert), C.double(value.(float64))))
-	case bool:
-		C.AMfree(C.AMlistPutBool(doc.handle, objId, C.ulonglong(index), C._Bool(insert), C._Bool(value.(bool))))
-	case EmptyList:
-		ListPutObject(doc, obj, index, insert, Object_List)
-	case EmptyMap:
-		ListPutObject(doc, obj, index, insert, Object_Map)
-	default:
-		fmt.Println("[automerge] ListSet - unhandled case!")
-	}
+func (doc Doc) InsertObject(obj Object, index uint64, insert bool, objType ObjectType) Object {
+	return ListPutObject(doc, obj, index, true, objType)
 }
+
+func (doc Doc) SetObject(obj Object, index uint64, objType ObjectType) Object {
+	return ListPutObject(doc, obj, index, false, objType)
+}
+
+func (doc Doc) Root() Map {
+	result := Map{}
+	result.root = doc
+	result.handle = Object{} // NOTE(nick): nil for root
+	return result
+}
+
+func (doc Doc) Set(key string, value interface{}) interface{} {
+	return doc.Root().Set(key, value)
+}
+
+func (doc Doc) Get(key string) Value {
+	return doc.Root().Get(key)
+}
+
+//
+// Object
+//
 
 func MapPutObject(doc Doc, obj Object, key string, objType ObjectType) Object {
 	objId := obj.handle
@@ -198,47 +188,105 @@ func ListPutObject(doc Doc, obj Object, index uint64, insert bool, objType Objec
 	return result
 }
 
-func (doc Doc) Root() Map {
-	result := Map{}
+func MapGet(doc Doc, obj Object, key string) Value {
+	cstr := C.CString(key)
+	defer C.free(unsafe.Pointer(cstr))
+
+	result := Value{}
+	result.handle = C.AMG_MapGet(doc.handle, obj.handle, cstr)
 	result.root = doc
-	result.handle = Object{} // nil for root
 	return result
+}
+
+func ListGet(doc Doc, obj Object, index uint64) Value {
+	result := Value{}
+	result.handle = C.AMG_ListGet(doc.handle, obj.handle, C.ulonglong(index))
+	result.root = doc
+	return result
+}
+
+func MapPut(doc Doc, obj Object, key string, value interface{}) Value {
+	cstr := C.CString(key)
+	defer C.free(unsafe.Pointer(cstr))
+
+	objId := obj.handle
+
+	switch value.(type) {
+	case string:
+		value_cstr := C.CString(value.(string))
+		defer C.free(unsafe.Pointer(value_cstr))
+		C.AMfree(C.AMmapPutStr(doc.handle, objId, cstr, value_cstr))
+	case int:
+		C.AMfree(C.AMmapPutInt(doc.handle, objId, cstr, C.longlong(value.(int))))
+	case uint64:
+		C.AMfree(C.AMmapPutInt(doc.handle, objId, cstr, C.longlong(value.(uint64))))
+	case float64:
+		C.AMfree(C.AMmapPutF64(doc.handle, objId, cstr, C.double(value.(float64))))
+	case bool:
+		C.AMfree(C.AMmapPutBool(doc.handle, obj.handle, cstr, C._Bool(value.(bool))))
+	case EmptyList:
+		MapPutObject(doc, obj, key, Object_List)
+	case EmptyMap:
+		MapPutObject(doc, obj, key, Object_Map)
+	default:
+		fmt.Println("[automerge] MapPut - unhandled case!")
+	}
+
+	result := Value{}
+	result.root = doc
+	result.handle = MapGet(doc, obj, key).handle
+	return result
+}
+
+func ListSet(doc Doc, obj Object, index uint64, insert bool, value interface{}) Value {
+	objId := obj.handle
+
+	switch value.(type) {
+	case string:
+		value_cstr := C.CString(value.(string))
+		defer C.free(unsafe.Pointer(value_cstr))
+		C.AMfree(C.AMlistPutStr(doc.handle, objId, C.ulonglong(index), C._Bool(insert), value_cstr))
+	case int:
+		C.AMfree(C.AMlistPutInt(doc.handle, objId, C.ulonglong(index), C._Bool(insert), C.longlong(value.(int))))
+	case uint64:
+		C.AMfree(C.AMlistPutInt(doc.handle, objId, C.ulonglong(index), C._Bool(insert), C.longlong(value.(uint64))))
+	case float64:
+		C.AMfree(C.AMlistPutF64(doc.handle, objId, C.ulonglong(index), C._Bool(insert), C.double(value.(float64))))
+	case bool:
+		C.AMfree(C.AMlistPutBool(doc.handle, objId, C.ulonglong(index), C._Bool(insert), C._Bool(value.(bool))))
+	case EmptyList:
+		ListPutObject(doc, obj, index, insert, Object_List)
+	case EmptyMap:
+		ListPutObject(doc, obj, index, insert, Object_Map)
+	default:
+		fmt.Println("[automerge] ListSet - unhandled case!")
+	}
+
+	result := Value{}
+	result.root = doc
+	result.handle = ListGet(doc, obj, index).handle
+	return result
+}
+
+// Returns "size" of object (for lists this is length, for maps this is number of keys?)
+func GetSize(doc Doc, obj Object) uint64 {
+	return uint64(C.AMG_GetSize(doc.handle, obj.handle))
 }
 
 //
 // Map
 //
 
-func (m Map) NewMap(key string) Map {
-	result := Map{}
-	result.handle = MapPutObject(m.root, m.handle, key, Object_Map)
-	result.root = m.root
-	return result
-}
-
-func (m Map) NewList(key string) List {
-	result := List{}
-	result.handle = MapPutObject(m.root, m.handle, key, Object_List)
-	result.root = m.root
-	return result
-}
-
-func (m Map) Set(key string, value interface{}) {
-	MapPut(m.root, m.handle, key, value)
+func (m Map) Set(key string, value interface{}) Value {
+	return MapPut(m.root, m.handle, key, value)
 }
 
 func (m Map) Get(key string) Value {
-	cstr := C.CString(key)
-	defer C.free(unsafe.Pointer(cstr))
-
-	result := Value{}
-	result.handle = C.AMG_MapGet(m.root.handle, m.handle.handle, cstr)
-	result.root = m.root
-	return result
+	return MapGet(m.root, m.handle, key)
 }
 
 func (m Map) Count() uint64 {
-	return uint64(C.AMG_GetSize(m.root.handle, m.handle.handle))
+	return GetSize(m.root, m.handle)
 }
 
 func (m Map) Delete(key string) {
@@ -265,41 +313,24 @@ func (m Map) Keys() []string {
 // List
 //
 
-func (list List) NewMap(index uint64) Map {
-	result := Map{}
-	result.handle = ListPutObject(list.root, list.handle, index, false, Object_Map)
-	result.root = list.root
-	return result
+func (list List) Insert(index uint64, value interface{}) Value {
+	return ListSet(list.root, list.handle, index, true, value)
 }
 
-func (list List) NewList(index uint64) List {
-	result := List{}
-	result.handle = ListPutObject(list.root, list.handle, index, false, Object_List)
-	result.root = list.root
-	return result
+func (list List) Set(index uint64, value interface{}) Value {
+	return ListSet(list.root, list.handle, index, false, value)
 }
 
-func (list List) Insert(index uint64, value interface{}) {
-	ListSet(list.root, list.handle, index, true, value)
-}
-
-func (list List) Set(index uint64, value interface{}) {
-	ListSet(list.root, list.handle, index, false, value)
-}
-
-func (list List) Push(value interface{}) {
-	ListSet(list.root, list.handle, C.SIZE_MAX, true, value)
+func (list List) Push(value interface{}) Value {
+	return ListSet(list.root, list.handle, C.SIZE_MAX, true, value)
 }
 
 func (list List) Get(index uint64) Value {
-	result := Value{}
-	result.handle = C.AMG_ListGet(list.root.handle, list.handle.handle, C.ulonglong(index))
-	result.root = list.root
-	return result
+	return ListGet(list.root, list.handle, index)
 }
 
 func (list List) Count() uint64 {
-	return uint64(C.AMG_GetSize(list.root.handle, list.handle.handle))
+	return GetSize(list.root, list.handle)
 }
 
 func (list List) Delete(index uint64) {
@@ -308,11 +339,13 @@ func (list List) Delete(index uint64) {
 
 func (list List) Pop() interface{} {
 	value := list.Get(C.SIZE_MAX)
-
 	list.Delete(C.SIZE_MAX)
-
 	return value.Value()
 }
+
+//
+// Value
+//
 
 // @Incomplete: do we want to define our own ValueType?
 func (v Value) Type() uint8 {
@@ -365,14 +398,6 @@ func (v Value) ToMap() Map {
 	return result
 }
 
-func (doc Doc) NewList(key string) List {
-	return doc.Root().NewList(key)
-}
-
-func (doc Doc) NewMap(key string) Map {
-	return doc.Root().NewMap(key)
-}
-
 func (doc Doc) List() EmptyList {
 	return EmptyList{}
 }
@@ -381,13 +406,9 @@ func (doc Doc) Map() EmptyMap {
 	return EmptyMap{}
 }
 
-func (doc Doc) Set(key string, value interface{}) {
-	doc.Root().Set(key, value)
-}
-
-func (doc Doc) Get(key string) Value {
-	return doc.Root().Get(key)
-}
+//
+// Helpers
+//
 
 func toCBool(x bool) C._Bool {
 	if x {
@@ -417,13 +438,13 @@ func main() {
 	root.Set("bar", 23)
 	root.Delete("bar")
 
-	mappy := doc1.Root().NewMap("mappy")
+	mappy := doc1.Root().Set("mappy", doc1.Map()).ToMap()
 	mappy.Set("a", true)
 
 	mappy2 := doc1.Root().Get("mappy").ToMap()
 	mappy2.Set("b", 123123)
 
-	cards := doc1.Root().NewList("cards")
+	cards := doc1.Root().Set("cards", doc1.List()).ToList()
 	cards.Push("a")
 	cards.Push("b")
 	cards.Push("c")
